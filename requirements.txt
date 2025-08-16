@@ -1,0 +1,10 @@
+fastapi 
+uvicorn 
+motor 
+langgraph 
+langchain-openai 
+openai 
+deepgram-sdk 
+httpx
+python-dotenv
+websockets

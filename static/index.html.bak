@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html>
+  <body>
+    <h1>Test Voice WS</h1>
+    <button onclick="start()">Start</button>
+    <button onclick="stop()">Stop</button>
+    <audio id="player" controls autoplay></audio>
+    <script>
+      let ws;
+      let mediaRecorder;
+
+      async function start() {
+        ws = new WebSocket("ws://localhost:8000/ws/call/test123");
+        ws.binaryType = "arraybuffer";
+
+        ws.onmessage = (event) => {
+          if (typeof event.data === "string") {
+            console.log("Text:", event.data);
+          } else {
+            // incoming audio (mp3)
+            const audioBlob = new Blob([event.data], { type: "audio/mpeg" });
+            const url = URL.createObjectURL(audioBlob);
+            document.getElementById("player").src = url;
+          }
+        };
+
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        mediaRecorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
+
+        mediaRecorder.ondataavailable = (e) => {
+          e.data.arrayBuffer().then((buf) => {
+            ws.send(buf); // send raw PCM/webm chunks
+          });
+        };
+
+        mediaRecorder.start(250); // send every 250ms
+      }
+
+      function stop() {
+        mediaRecorder.stop();
+        ws.close();
+      }
+    </script>
+  </body>
+</html>

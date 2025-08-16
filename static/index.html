@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Deepgram Live Call & Chat Demo</title>
+</head>
+<body>
+  <h2>Deepgram Live Call Demo</h2>
+  <button id="startBtn">Start Call</button>
+  <button id="stopBtn" disabled>Stop Call</button>
+  <div id="transcript"></div>
+
+  <h2>Text Chat</h2>
+  <div id="chatWindow" style="border:1px solid #ccc; padding:10px; width:400px; height:300px; overflow-y:auto;"></div>
+  <input type="text" id="userMessage" placeholder="Type your message" style="width:300px;" />
+  <button id="sendBtn">Send</button>
+
+  <script>
+    const agentId = "{{AGENT_ID}}"; // Injected by FastAPI
+
+    // ---------------- Voice Call ----------------
+    let ws;
+    let audioContext;
+    let agentAudioContext = new AudioContext({ sampleRate: 24000 });
+    let isCalling = false;
+    const transcriptDiv = document.getElementById("transcript");
+
+    document.getElementById("startBtn").onclick = async () => {
+      if (isCalling) return;
+      isCalling = true;
+
+      ws = new WebSocket(`ws://localhost:8000/ws/call/${agentId}`);
+      ws.binaryType = "arraybuffer";
+
+      ws.onopen = async () => {
+        console.log("WebSocket opened, starting mic...");
+        await startMic();
+        document.getElementById("startBtn").disabled = true;
+        document.getElementById("stopBtn").disabled = false;
+      };
+
+      ws.onmessage = async (event) => {
+        if (typeof event.data === "string") {
+          const msg = JSON.parse(event.data);
+          if (msg.type === "transcript") {
+            transcriptDiv.textContent = msg.data.channel.alternatives[0].transcript;
+          }
+        } else {
+          playAgentAudio(event.data);
+        }
+      };
+
+      ws.onclose = () => {
+        stopMic();
+        isCalling = false;
+        document.getElementById("startBtn").disabled = false;
+        document.getElementById("stopBtn").disabled = true;
+      };
+    };
+
+    document.getElementById("stopBtn").onclick = () => {
+      if (ws) ws.close();
+    };
+
+    async function startMic() {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      audioContext = new AudioContext({ sampleRate: 24000 });
+
+      const source = audioContext.createMediaStreamSource(stream);
+      const processor = audioContext.createScriptProcessor(4096, 1, 1);
+      source.connect(processor);
+      processor.connect(audioContext.destination);
+
+      processor.onaudioprocess = (e) => {
+        const inputData = e.inputBuffer.getChannelData(0);
+        const pcm16 = convertFloat32ToInt16(inputData);
+        if (ws && ws.readyState === WebSocket.OPEN) ws.send(pcm16.buffer);
+      };
+    }
+
+    function stopMic() {
+      if (audioContext) {
+        audioContext.close();
+        audioContext = null;
+      }
+    }
+
+    function convertFloat32ToInt16(buffer) {
+      let l = buffer.length;
+      let buf = new Int16Array(l);
+      while (l--) {
+        let s = Math.max(-1, Math.min(1, buffer[l]));
+        buf[l] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+      }
+      return buf;
+    }
+
+    async function playAgentAudio(arrayBuffer) {
+      try {
+        const audioBuffer = await agentAudioContext.decodeAudioData(arrayBuffer);
+        const source = agentAudioContext.createBufferSource();
+        source.buffer = audioBuffer;
+        source.connect(agentAudioContext.destination);
+        source.start();
+      } catch (e) {
+        console.error("Error decoding agent audio:", e);
+      }
+    }
+
+    // ---------------- Text Chat ----------------
+    const chatWindow = document.getElementById("chatWindow");
+    const userMessageInput = document.getElementById("userMessage");
+
+    document.getElementById("sendBtn").onclick = async () => {
+      const message = userMessageInput.value.trim();
+      if (!message) return;
+
+      appendMessage("You", message);
+      userMessageInput.value = "";
+
+      try {
+        const response = await fetch(`/agents/${agentId}/chat`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ messages: [{ role: "user", content: message }] }),
+        });
+        const data = await response.json();
+        appendMessage("Assistant", data.reply || "");
+      } catch (err) {
+        console.error(err);
+        appendMessage("System", "Error contacting the agent.");
+      }
+    };
+
+    function appendMessage(sender, text) {
+      const p = document.createElement("p");
+      p.innerHTML = `<strong>${sender}:</strong> ${text}`;
+      chatWindow.appendChild(p);
+      chatWindow.scrollTop = chatWindow.scrollHeight;
+    }
+  </script>
+</body>
+</html>
